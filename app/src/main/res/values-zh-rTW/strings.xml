@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <resources>
-    <string name="app_name" translatable="false">Litube</string>
+    <string name="app_name" translatable="false">LitePipe</string>
     <string name="thumbnail">封面</string>
     <string name="video">影片</string>
     <string name="cancel">取消</string>

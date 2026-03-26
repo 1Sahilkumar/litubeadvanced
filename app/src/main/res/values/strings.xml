@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <resources>
-    <string name="app_name" translatable="false">Litube</string>
+    <string name="app_name" translatable="false">LitePipe</string>
     <string name="thumbnail">Thumbnail</string>
     <string name="video">Video</string>
     <string name="cancel">Cancel</string>
@@ -19,7 +19,8 @@
     <string name="save">Save</string>
     <string name="share">Share</string>
     <string name="share_thumbnail">Share Thumbnail</string>
-    <string name="extension">Extensions</string>
+    <string name="extension">LitePipe Settings</string>
+    <string name="litepipe_settings">LitePipe Settings</string>
     <string name="request_restart">Restart to apply changes</string>
     <string name="restart">Restart</string>
     <string name="display_dislikes">Show dislikes</string>
@@ -40,7 +41,7 @@
     <string name="background_play">Background play</string>
     <string name="pip">Picture-in-Picture</string>
     <string name="remember_playback_speed">Remember speed</string>
-    <string name="reset">Reset</string>
+    <string name="reset">Reset Settings</string>
     <string name="player_speed_default">1x</string>
     <string name="player_quality_auto">Auto</string>
     <string name="player_time_separator"> / </string>
@@ -90,14 +91,14 @@
     <string name="audio_track">Audio Track</string>
     <string name="switched_to_audio_track">Switched to: %1$s</string>
     <string name="info">Info</string>
-    <string name="more_options">More options</string>
+    <string name="more_options">Options</string>
     <string name="failed_to_load_video_details">Failed to load video details</string>
     <string name="failed_to_load_image">Failed to load image</string>
     <string name="application_not_found">Application not found</string>
     <string name="press_back_again_to_exit">Press back again to exit</string>
     <string name="tap_to_unmute">Tap to unmute</string>
     <string name="threads">Threads</string>
-    <string name="app_description">An advanced webview wrapper for YouTube.</string>
+    <string name="app_description">An advanced webview wrapper for YouTube with cool features.</string>
     <string name="source_code">Source Code</string>
     <string name="clear_cache">Clear Cache</string>
     <string name="export_error_log">Export Error Log</string>
@@ -111,7 +112,7 @@
     <string name="failed_to_check_for_updates">Failed to check for updates</string>
     <string name="clear_cache_confirmation">Are you sure you want to clear app cache?</string>
     <string name="clear">Clear</string>
-    <string name="source_link">https://github.com/HydeYYHH/litube</string>
+    <string name="source_link">https://github.com/CodeLab-SK/LitePipe</string>
     <string name="about">About</string>
     <string name="download_tasks_added">Download tasks added</string>
     <string name="download_tasks_added_count">%1$d tasks added to queue</string>
@@ -147,8 +148,8 @@
     <string name="download_progress_simple">%1$s MB</string>
     <string name="download_status_with_type">%1$s • %2$s</string>
     <string name="filename">Filename</string>
-    <string name="reset_extension_title">Reset extensions</string>
-    <string name="reset_extension_message">Reset all extension settings to default?</string>
+    <string name="reset_extension_title">Reset settings</string>
+    <string name="reset_extension_message">Reset all LitePipe settings to default?</string>
     <string name="selected_count">%1$d selected</string>
     <string name="videos_count">%1$d videos</string>
     <string name="size_mb">%.1f MB</string>
@@ -157,5 +158,7 @@
     <string name="delete_items_count">Delete %1$d items?</string>
     <string name="downloads_default_title">Downloads</string>
     <string name="download_singular">Download</string>
+    <string name="sponsorblock">SponsorBlock</string>
+    <string name="miscellaneous">Miscellaneous</string>
 
 </resources>

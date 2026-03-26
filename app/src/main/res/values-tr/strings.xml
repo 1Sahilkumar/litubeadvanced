@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <resources>
-    <string name="app_name" translatable="false">Litube</string>
+    <string name="app_name" translatable="false">LitePipe</string>
     <string name="thumbnail">Küçük Resim</string>
     <string name="video">Video</string>
     <string name="cancel">İptal</string>

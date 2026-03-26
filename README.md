@@ -72,7 +72,7 @@ The APK will be available in `app/build/outputs/apk/debug/`.
 4. **Player Controls:** Use intuitive gestures (swipe for volume/brightness) while watching.
 
 ## 🤝 Contributing
-Whether you have ideas, bug reports, translations, design improvements, code cleanups, or major feature changes — **all help is welcome**! The more we do together, the better LitePipe becomes.
+Whether you have ideas, bug reports, translations, design improvements, code cleanups, or major feature changes — **all help is welcome**!
 
 ### How to Contribute
 - **Found a bug?** → Open an [Issue](https://github.com/CodeLab-SK/LitePipe/issues)
@@ -87,7 +87,7 @@ You can open and build the project like any other normal Android project using *
 
 ## ❓ FAQ
 **Q: Is this app safe?**  
-**A:** Yes. LitePipe is a privacy-respecting WebView wrapper. It uses the official YouTube mobile site as a base, providing the same level of security while adding powerful enhancements.
+**A:** Yes. LitePipe uses the official YouTube mobile site as a base, providing the same level of security while adding powerful enhancements.
 
 **Q: Why use LitePipe instead of the official YouTube app?**  
 **A:** LitePipe offers an ad-free experience, skips sponsors, supports background play, and includes a powerful downloader — all while being lighter on battery and storage.

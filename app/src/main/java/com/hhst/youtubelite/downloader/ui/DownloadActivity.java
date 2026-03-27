@@ -33,6 +33,7 @@ import androidx.core.content.FileProvider;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.media3.common.util.UnstableApi;
+import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -58,6 +59,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import javax.inject.Inject;
@@ -139,7 +141,7 @@ public class DownloadActivity extends AppCompatActivity {
                     selectedIds.clear();
                 }
                 updateUIState();
-                adapter.notifyDataSetChanged();
+                adapter.refreshCurrentList();
             });
         }
 
@@ -164,7 +166,7 @@ public class DownloadActivity extends AppCompatActivity {
     private void clearSelection() {
         selectedIds.clear();
         updateUIState();
-        adapter.notifyDataSetChanged();
+        adapter.refreshCurrentList();
     }
 
     private void updateUIState() {
@@ -319,7 +321,7 @@ public class DownloadActivity extends AppCompatActivity {
         if (selectedIds.contains(id)) selectedIds.remove(id);
         else selectedIds.add(id);
         updateUIState();
-        adapter.notifyDataSetChanged();
+        adapter.refreshCurrentList();
     }
 
     private void showDeleteDialog(DownloadRecord record) {
@@ -358,7 +360,7 @@ public class DownloadActivity extends AppCompatActivity {
     @Override protected void onStop() { super.onStop(); unregisterReceiver(receiver); if (isBound) unbindService(connection); }
 
     private void loadRecords() {
-        adapter.setItems(getCurrentlyDisplayedRecords());
+        adapter.updateItems(getCurrentlyDisplayedRecords());
         findViewById(R.id.emptyView).setVisibility(adapter.getItemCount() == 0 ? View.VISIBLE : View.GONE);
     }
 
@@ -392,10 +394,9 @@ public class DownloadActivity extends AppCompatActivity {
 
         DownloadRecordsAdapter(Actions a, boolean g) { this.actions = a; this.useGrouping = g; }
 
-        @SuppressLint("NotifyDataSetChanged")
-        void setItems(List<DownloadRecord> records) {
-            displayItems.clear();
-            if (!useGrouping) displayItems.addAll(records);
+        void updateItems(List<DownloadRecord> records) {
+            List<Object> newList = new ArrayList<>();
+            if (!useGrouping) newList.addAll(records);
             else {
                 Map<String, List<DownloadRecord>> groups = new LinkedHashMap<>();
                 List<DownloadRecord> individuals = new ArrayList<>();
@@ -407,11 +408,45 @@ public class DownloadActivity extends AppCompatActivity {
                     } else { individuals.add(r); }
                 }
                 for (Map.Entry<String, List<DownloadRecord>> e : groups.entrySet()) {
-                    if (e.getValue().size() > 1) displayItems.add(new FolderHeader(e.getKey(), e.getValue()));
+                    if (e.getValue().size() > 1) newList.add(new FolderHeader(e.getKey(), e.getValue()));
                     else individuals.addAll(e.getValue());
                 }
-                displayItems.addAll(individuals);
+                newList.addAll(individuals);
             }
+
+            DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(new DiffUtil.Callback() {
+                @Override public int getOldListSize() { return displayItems.size(); }
+                @Override public int getNewListSize() { return newList.size(); }
+                @Override public boolean areItemsTheSame(int oldPos, int newPos) {
+                    Object oldItem = displayItems.get(oldPos);
+                    Object newItem = newList.get(newPos);
+                    if (oldItem instanceof DownloadRecord && newItem instanceof DownloadRecord)
+                        return ((DownloadRecord) oldItem).getTaskId().equals(((DownloadRecord) newItem).getTaskId());
+                    if (oldItem instanceof FolderHeader && newItem instanceof FolderHeader)
+                        return ((FolderHeader) oldItem).name.equals(((FolderHeader) newItem).name);
+                    return false;
+                }
+                @Override public boolean areContentsTheSame(int oldPos, int newPos) {
+                    Object oldItem = displayItems.get(oldPos);
+                    Object newItem = newList.get(newPos);
+                    if (oldItem instanceof DownloadRecord && newItem instanceof DownloadRecord)
+                        return Objects.equals(oldItem, newItem) && actions.isSelected((DownloadRecord) oldItem) == actions.isSelected((DownloadRecord) newItem);
+                    if (oldItem instanceof FolderHeader && newItem instanceof FolderHeader) {
+                        FolderHeader oldF = (FolderHeader) oldItem;
+                        FolderHeader newF = (FolderHeader) newItem;
+                        return oldF.children.size() == newF.children.size();
+                    }
+                    return false;
+                }
+            });
+
+            displayItems.clear();
+            displayItems.addAll(newList);
+            diffResult.dispatchUpdatesTo(this);
+        }
+
+        @SuppressLint("NotifyDataSetChanged")
+        void refreshCurrentList() {
             notifyDataSetChanged();
         }
 

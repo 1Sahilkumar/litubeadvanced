@@ -66,16 +66,16 @@ public class PlaybackService extends Service {
 	public void onCreate() {
 		super.onCreate();
 		notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-			final NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Player Controls", NotificationManager.IMPORTANCE_LOW);
-			channel.setDescription("Media playback controls");
-			channel.setShowBadge(false);
-			channel.setSound(null, null);
-			channel.enableLights(false);
-			channel.enableVibration(false);
-			channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-			if (notificationManager != null) notificationManager.createNotificationChannel(channel);
-		}
+		
+		final NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Player Controls", NotificationManager.IMPORTANCE_LOW);
+		channel.setDescription("Media playback controls");
+		channel.setShowBadge(false);
+		channel.setSound(null, null);
+		channel.enableLights(false);
+		channel.enableVibration(false);
+		channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+		if (notificationManager != null) notificationManager.createNotificationChannel(channel);
+
 		mediaSession = new MediaSessionCompat(this, TAG);
 		final PlaybackStateCompat initialState = new PlaybackStateCompat.Builder().setActions(PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE | PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT | PlaybackStateCompat.ACTION_SEEK_TO).setState(PlaybackStateCompat.STATE_NONE, 0, 1.0f).build();
 		mediaSession.setPlaybackState(initialState);
@@ -191,7 +191,7 @@ public class PlaybackService extends Service {
 	}
 
 	public void hideNotification() {
-		stopForeground(true);
+		stopForeground(STOP_FOREGROUND_REMOVE);
 		if (notificationManager != null) notificationManager.cancel(NOTIFICATION_ID);
 	}
 
@@ -211,14 +211,14 @@ public class PlaybackService extends Service {
 	@Override
 	public void onTaskRemoved(final Intent rootIntent) {
 		super.onTaskRemoved(rootIntent);
-		stopForeground(true);
+		stopForeground(STOP_FOREGROUND_REMOVE);
 		stopSelf();
 	}
 
 	@Override
 	public void onDestroy() {
 		super.onDestroy();
-		stopForeground(true);
+		stopForeground(STOP_FOREGROUND_REMOVE);
 		if (mediaSession != null) {
 			mediaSession.setActive(false);
 			mediaSession.release();

@@ -96,11 +96,9 @@ public class DownloadService extends Service {
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW);
-            channel.setSound(null, null);
-            notificationManager.createNotificationChannel(channel);
-        }
+        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW);
+        channel.setSound(null, null);
+        if (notificationManager != null) notificationManager.createNotificationChannel(channel);
     }
 
     @Nullable
@@ -281,7 +279,7 @@ public class DownloadService extends Service {
     private void killNotification() {
         if (activeTasks.isEmpty()) {
             stopForeground(STOP_FOREGROUND_REMOVE);
-            notificationManager.cancel(NOTIFICATION_ID);
+            if (notificationManager != null) notificationManager.cancel(NOTIFICATION_ID);
         }
     }
 

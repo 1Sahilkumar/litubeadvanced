@@ -8,7 +8,21 @@ import java.util.List;
 public final class ExtractionSession {
 	private final Object lock = new Object();
 	private final List<Cancellable> cancellables = new ArrayList<>();
+	private final AuthContext auth;
 	private boolean cancelled = false;
+
+	public ExtractionSession() {
+		this(new AuthContext("none", null, null, null, null, null, false, false, 0L));
+	}
+
+	public ExtractionSession(@NonNull AuthContext auth) {
+		this.auth = auth;
+	}
+
+	@NonNull
+	public AuthContext getAuth() {
+		return auth;
+	}
 
 	public boolean isCancelled() {
 		synchronized (lock) {

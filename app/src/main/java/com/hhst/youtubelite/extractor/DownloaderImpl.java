@@ -1,5 +1,6 @@
 package com.hhst.youtubelite.extractor;
 
+import android.util.Log;
 import android.webkit.CookieManager;
 
 import androidx.annotation.NonNull;
@@ -27,17 +28,20 @@ import okhttp3.ResponseBody;
 @Singleton
 public final class DownloaderImpl extends Downloader {
 
+	private static final String TAG = "DownloaderImpl";
 	private static final String YOUTUBE_RESTRICTED_MODE_COOKIE = "PREF=f2=8000000";
 
 	private final OkHttpClient client;
+	private final ExtractionSessionScope scope;
 
 	@Inject
-	public DownloaderImpl(final OkHttpClient client) {
+	public DownloaderImpl(final OkHttpClient client, final ExtractionSessionScope scope) {
 		this.client = client.newBuilder()
 				.readTimeout(20, TimeUnit.SECONDS)
 				.connectTimeout(20, TimeUnit.SECONDS)
 				.followRedirects(true)
 				.build();
+		this.scope = scope;
 	}
 
 	@Override
@@ -55,14 +59,20 @@ public final class DownloaderImpl extends Downloader {
 				.method(httpMethod, requestBody)
 				.header("User-Agent", Constant.USER_AGENT);
 
+		ExtractionSession session = scope.get();
+		AuthContext auth = session != null ? session.getAuth() : null;
+
 		final String webViewCookies = CookieManager.getInstance().getCookie(url);
 		StringBuilder cookieBuilder = new StringBuilder();
 		if (webViewCookies != null) {
 			cookieBuilder.append(webViewCookies);
+		} else if (auth != null && auth.cookies() != null) {
+			cookieBuilder.append(auth.cookies());
 		}
 
 		if (url.contains("youtube.com") || url.contains("youtu.be")) {
-			if (webViewCookies == null || !webViewCookies.contains("PREF=")) {
+			String currentCookies = cookieBuilder.toString();
+			if (!currentCookies.contains("PREF=")) {
 				if (cookieBuilder.length() > 0) cookieBuilder.append("; ");
 				cookieBuilder.append(YOUTUBE_RESTRICTED_MODE_COOKIE);
 			}
@@ -83,6 +93,17 @@ public final class DownloaderImpl extends Downloader {
 			}
 		}
 
+		// Add YouTube specific auth headers from context
+		YoutubeAuth.Result authHeaders = YoutubeAuth.headers(url, auth, System.currentTimeMillis());
+		if (authHeaders.note() != null) {
+			Log.d(TAG, "Skipped YouTube auth headers: " + authHeaders.note());
+		}
+		for (Map.Entry<String, String> entry : authHeaders.headers().entrySet()) {
+			if (!hasHeader(headers, entry.getKey())) {
+				builder.header(entry.getKey(), entry.getValue());
+			}
+		}
+
 		try (final Response response = client.newCall(builder.build()).execute()) {
 			if (response.code() == 429) {
 				throw new ReCaptchaException("reCaptcha Challenge requested", url);
@@ -99,8 +120,21 @@ public final class DownloaderImpl extends Downloader {
 		}
 	}
 
+	private boolean hasHeader(@Nullable Map<String, List<String>> headers, @NonNull String name) {
+		if (headers == null) return false;
+		for (String key : headers.keySet()) {
+			if (name.equalsIgnoreCase(key)) return true;
+		}
+		return false;
+	}
+
 	public <T> T withExtractionSession(@NonNull final ExtractionTask<T> task, @Nullable final ExtractionSession session) throws IOException, org.schabi.newpipe.extractor.exceptions.ExtractionException, InterruptedException {
-		return task.execute();
+		try {
+			scope.set(session);
+			return task.execute();
+		} finally {
+			scope.set(null);
+		}
 	}
 
 	public boolean canUsePlaybackMemoryCache(@NonNull final String url) {

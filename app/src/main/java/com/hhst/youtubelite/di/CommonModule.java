@@ -9,6 +9,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
 import androidx.media3.datasource.cache.SimpleCache;
 
 import com.google.gson.Gson;
+import com.hhst.youtubelite.extractor.potoken.PoTokenContextStore;
 import com.hhst.youtubelite.util.WebResourceUtils;
 import com.tencent.mmkv.MMKV;
 
@@ -108,6 +109,12 @@ public class CommonModule {
 		final File cacheDir = new File(context.getCacheDir(), "player");
 		final LeastRecentlyUsedCacheEvictor evictor = createPlayerCacheEvictor();
 		return new SimpleCache(cacheDir, evictor, new StandaloneDatabaseProvider(context));
+	}
+
+	@Provides
+	@Singleton
+	public PoTokenContextStore providePoTokenContextStore() {
+		return new PoTokenContextStore();
 	}
 
 	Cache createOkHttpCache(@NonNull final Context context) {

@@ -17,6 +17,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.hhst.youtubelite.R;
 import com.hhst.youtubelite.extension.ExtensionManager;
 import com.hhst.youtubelite.extractor.YoutubeExtractor;
+import com.hhst.youtubelite.extractor.potoken.PoTokenContextStore;
 import com.hhst.youtubelite.player.LitePlayer;
 import com.hhst.youtubelite.player.controller.Controller;
 import com.hhst.youtubelite.player.queue.QueueRepository;
@@ -37,35 +38,23 @@ public final class YoutubeFragment extends Fragment {
 	private static final String ARG_URL = "url";
 	private static final String ARG_TAG = "tag";
 
-	@Inject
-	YoutubeExtractor youtubeExtractor;
-	@Inject
-	LitePlayer player;
-	@Inject
-	Controller controller;
-	@Inject
-	ExtensionManager extensionManager;
-	@Inject
-	TabManager tabManager;
-	@Inject
-	QueueRepository queueRepository;
-	@Inject
-	QueueWarmer queueWarmer;
-	@Inject
-	OkHttpClient okHttpClient;
-	@Inject
-	Executor executor;
+	@Inject YoutubeExtractor youtubeExtractor;
+	@Inject LitePlayer player;
+	@Inject Controller controller;
+	@Inject ExtensionManager extensionManager;
+	@Inject TabManager tabManager;
+	@Inject QueueRepository queueRepository;
+	@Inject QueueWarmer queueWarmer;
+	@Inject OkHttpClient okHttpClient;
+	@Inject Executor executor;
+	@Inject PoTokenProviderImpl poTokenProvider;
+	@Inject PoTokenContextStore poTokenContextStore;
 
-	@Nullable
-	private String url;
-	@Nullable
-	private String mTag;
-	@Nullable
-	private YoutubeWebview webview;
-	@Nullable
-	private SwipeRefreshLayout swipeRefreshLayout;
-	@Nullable
-	private WebBackForwardList historySnapshot;
+	@Nullable private String url;
+	@Nullable private String mTag;
+	@Nullable private YoutubeWebview webview;
+	@Nullable private SwipeRefreshLayout swipeRefreshLayout;
+	@Nullable private WebBackForwardList historySnapshot;
 
 	private final Handler handler = new Handler(Looper.getMainLooper());
 	private final Runnable refreshTimeoutRunnable = () -> {
@@ -131,6 +120,8 @@ public final class YoutubeFragment extends Fragment {
 		webview.setQueueRepository(queueRepository);
 		webview.setQueueWarmer(queueWarmer);
 		webview.setOkHttpClient(okHttpClient);
+		webview.setPoTokenProvider(poTokenProvider);
+		webview.setPoTokenContextStore(poTokenContextStore);
 		webview.setUpdateVisitedHistory(u -> {
 			YoutubeFragment.this.url = u;
 			tabManager.onUrlChanged(this, u);
@@ -157,6 +148,7 @@ public final class YoutubeFragment extends Fragment {
 	public void onResume() {
 		super.onResume();
 		if (webview != null && !isHidden()) {
+			webview.setScriptActive(true);
 			webview.onResume();
 		}
 	}
@@ -166,6 +158,7 @@ public final class YoutubeFragment extends Fragment {
 		super.onPause();
 		if (webview != null && !isHidden()) {
 			if (getActivity() != null && getActivity().isInPictureInPictureMode()) return;
+			webview.setScriptActive(false);
 			webview.onPause();
 		}
 	}
@@ -174,11 +167,11 @@ public final class YoutubeFragment extends Fragment {
 	public void onHiddenChanged(final boolean hidden) {
 		super.onHiddenChanged(hidden);
 		if (webview != null) {
+			webview.setScriptActive(!hidden);
 			if (hidden) {
 				webview.onPause();
 			} else {
 				webview.onResume();
-
 				webview.requestLayout();
 				webview.invalidate();
 			}
@@ -205,24 +198,8 @@ public final class YoutubeFragment extends Fragment {
 		if (webview != null) webview.saveState(outState);
 	}
 
-	@Nullable
-	public String getUrl() {
-		return url;
-	}
-
-	@Nullable
-	public String getMTag() {
-		return mTag;
-	}
-
-	@Nullable
-	public YoutubeWebview getWebview() {
-		return webview;
-	}
-
-	@Nullable
-	public WebBackForwardList getHistorySnapshot() {
-		return historySnapshot;
-	}
-
+	@Nullable public String getUrl() { return url; }
+	@Nullable public String getMTag() { return mTag; }
+	@Nullable public YoutubeWebview getWebview() { return webview; }
+	@Nullable public WebBackForwardList getHistorySnapshot() { return historySnapshot; }
 }

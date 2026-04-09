@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.google.gson.Gson;
+import com.hhst.youtubelite.extractor.potoken.LitePoTokenProvider;
 import com.tencent.mmkv.MMKV;
 
 import org.schabi.newpipe.extractor.Image;
@@ -12,6 +13,7 @@ import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.exceptions.ExtractionException;
 import org.schabi.newpipe.extractor.localization.Localization;
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 
@@ -34,6 +36,8 @@ import javax.inject.Singleton;
 public final class YoutubeExtractor {
 	private static final Pattern VIDEO_ID_PATTERN = Pattern.compile("(?:v=|=v/|/v/|/u/\\w/|embed/|watch\\?v=|shorts/|youtu.be/)([a-zA-Z0-9_-]{11})");
 
+	private final DownloaderImpl downloader;
+	private final AuthContextFactory authContextFactory;
 	private final MMKV cache;
 	private final Gson gson;
 	private final PlaybackDetailsMemoryCache playbackDetailsMemoryCache;
@@ -43,33 +47,26 @@ public final class YoutubeExtractor {
 
 	@Inject
 	public YoutubeExtractor(@NonNull final DownloaderImpl downloader,
+							@NonNull final LitePoTokenProvider litePoTokenProvider,
+							@NonNull final AuthContextFactory authContextFactory,
+							@NonNull final SessionClientProfileProvider profiles,
 							@NonNull final MMKV cache,
 							@NonNull final Gson gson,
 							@NonNull final PlaybackDetailsMemoryCache playbackDetailsMemoryCache) {
-		this(
-				cache,
-				gson,
-				playbackDetailsMemoryCache,
-				(videoID, session) -> downloader.withExtractionSession(
-						() -> StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=" + videoID),
-						session),
-				new DownloaderPlaybackCacheContextProvider(downloader),
-				System::currentTimeMillis);
-		NewPipe.init(downloader, Localization.fromLocale(Locale.getDefault()));
-	}
-
-	YoutubeExtractor(@NonNull final MMKV cache,
-					 @NonNull final Gson gson,
-					 @NonNull final PlaybackDetailsMemoryCache playbackDetailsMemoryCache,
-					 @NonNull final StreamInfoFetcher streamInfoFetcher,
-					 @NonNull final PlaybackCacheContextProvider playbackCacheContextProvider,
-					 @NonNull final LongSupplier currentTimeMillisSupplier) {
+		this.downloader = downloader;
+		this.authContextFactory = authContextFactory;
 		this.cache = cache;
 		this.gson = gson;
 		this.playbackDetailsMemoryCache = playbackDetailsMemoryCache;
-		this.streamInfoFetcher = streamInfoFetcher;
-		this.playbackCacheContextProvider = playbackCacheContextProvider;
-		this.currentTimeMillisSupplier = currentTimeMillisSupplier;
+		this.streamInfoFetcher = (videoID, session) -> downloader.withExtractionSession(
+						() -> StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=" + videoID),
+						session);
+		this.playbackCacheContextProvider = new DownloaderPlaybackCacheContextProvider(downloader);
+		this.currentTimeMillisSupplier = System::currentTimeMillis;
+		
+		NewPipe.init(downloader, Localization.fromLocale(Locale.getDefault()));
+		YoutubeStreamExtractor.setPoTokenProvider(litePoTokenProvider);
+		YoutubeStreamExtractor.setClientProfileProvider(profiles);
 	}
 
 	@Nullable
@@ -101,9 +98,12 @@ public final class YoutubeExtractor {
 											  @Nullable final ExtractionSession session) throws ExtractionException, IOException, InterruptedException {
 		final String videoID = requireVideoId(videoUrl);
 		final VideoDetails cachedDetails = readCachedVideoDetails(videoID);
+		
+		final ExtractionSession effectiveSession = session != null ? session : new ExtractionSession(authContextFactory.create(videoUrl));
+		
 		final boolean cacheLookupAllowed = cachedDetails != null
 				&& playbackCacheContextProvider.canUsePlaybackMemoryCache(videoUrl)
-				&& playbackCacheContextProvider.canPopulatePlaybackMemoryCache(session);
+				&& playbackCacheContextProvider.canPopulatePlaybackMemoryCache(effectiveSession);
 		final String fingerprint = cacheLookupAllowed
 				? playbackCacheContextProvider.buildRequestContextFingerprint(videoUrl)
 				: null;
@@ -113,13 +113,13 @@ public final class YoutubeExtractor {
 						videoID,
 						fingerprint,
 						currentTimeMillisSupplier.getAsLong());
-				ensureNotCancelled(session);
+				ensureNotCancelled(effectiveSession);
 				if (cachedStreamDetails != null) {
 					return new PlaybackDetails(cachedDetails, cachedStreamDetails);
 				}
 			}
 
-			final StreamInfo streamInfo = fetchStreamInfo(videoID, session);
+			final StreamInfo streamInfo = fetchStreamInfo(videoID, effectiveSession);
 			final StreamDetails streamDetails = buildStreamDetails(streamInfo);
 			final VideoDetails videoDetails;
 			if (cachedDetails != null) {
@@ -128,9 +128,9 @@ public final class YoutubeExtractor {
 				videoDetails = buildVideoDetails(streamInfo);
 				cacheVideoDetails(videoID, videoDetails);
 			}
-			ensureNotCancelled(session);
+			ensureNotCancelled(effectiveSession);
 			if (playbackCacheContextProvider.canUsePlaybackMemoryCache(videoUrl)
-					&& playbackCacheContextProvider.canPopulatePlaybackMemoryCache(session)) {
+					&& playbackCacheContextProvider.canPopulatePlaybackMemoryCache(effectiveSession)) {
 				playbackDetailsMemoryCache.put(
 						videoID,
 						playbackCacheContextProvider.buildRequestContextFingerprint(videoUrl),
@@ -139,7 +139,7 @@ public final class YoutubeExtractor {
 			}
 			return new PlaybackDetails(videoDetails, streamDetails);
 		} finally {
-			playbackCacheContextProvider.clearPlaybackMemoryCacheSession(session);
+			playbackCacheContextProvider.clearPlaybackMemoryCacheSession(effectiveSession);
 		}
 	}
 
@@ -149,7 +149,7 @@ public final class YoutubeExtractor {
 
 	@NonNull
 	private StreamInfo fetchStreamInfo(@NonNull final String videoID,
-									   @Nullable final ExtractionSession session) throws ExtractionException, IOException, InterruptedException {
+									   @Nullable final ExtractionSession session) throws org.schabi.newpipe.extractor.exceptions.ExtractionException, IOException, InterruptedException {
 		ensureNotCancelled(session);
 		final StreamInfo streamInfo = streamInfoFetcher.fetch(videoID, session);
 		ensureNotCancelled(session);

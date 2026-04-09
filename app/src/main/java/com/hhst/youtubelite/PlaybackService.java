@@ -31,12 +31,14 @@ import com.hhst.youtubelite.player.queue.QueueNav;
 import com.hhst.youtubelite.player.engine.Engine;
 import com.hhst.youtubelite.ui.MainActivity;
 
+import java.io.InterruptedIOException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import dagger.hilt.android.AndroidEntryPoint;
 
@@ -58,6 +60,7 @@ public class PlaybackService extends Service {
 	private boolean isSeeking = false;
 	private final Runnable resetSeekFlagRunnable = () -> isSeeking = false;
 	private boolean lastIsPlayingState = false;
+	private volatile boolean destroyed = false;
 
 	@Nullable
 	@Override
@@ -68,6 +71,7 @@ public class PlaybackService extends Service {
 	@Override
 	public void onCreate() {
 		super.onCreate();
+		destroyed = false;
 		notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 		
 		final NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Player Controls", NotificationManager.IMPORTANCE_LOW);
@@ -90,13 +94,15 @@ public class PlaybackService extends Service {
 
 	@Override
 	public int onStartCommand(@Nullable final Intent intent, final int flags, final int startId) {
-		if (intent != null) MediaButtonReceiver.handleIntent(mediaSession, intent);
+		MediaSessionCompat session = mediaSession;
+		if (intent != null && session != null) MediaButtonReceiver.handleIntent(session, intent);
 		return super.onStartCommand(intent, flags, startId);
 	}
 
 	public void initialize(@NonNull final Engine engine) {
-		if (mediaSession == null) return;
-		mediaSession.setCallback(new MediaSessionCompat.Callback() {
+		MediaSessionCompat session = mediaSession;
+		if (shouldAbort() || session == null) return;
+		session.setCallback(new MediaSessionCompat.Callback() {
 			@Override
 			public void onPlay() {
 				engine.play();
@@ -125,12 +131,12 @@ public class PlaybackService extends Service {
 				engine.seekTo(pos);
 			}
 		});
-		mediaSession.setActive(true);
+		session.setActive(true);
 	}
 
 	@Nullable
 	private Bitmap fetchThumbnail(@Nullable final String urlStr) {
-		if (urlStr == null || urlStr.isEmpty()) return null;
+		if (urlStr == null || urlStr.isEmpty() || shouldAbort()) return null;
 		Bitmap bitmap = null;
 		HttpURLConnection conn = null;
 		try {
@@ -139,8 +145,10 @@ public class PlaybackService extends Service {
 			conn.setConnectTimeout(CONNECT_TIMEOUT);
 			conn.setReadTimeout(READ_TIMEOUT);
 			conn.connect();
+			if (shouldAbort()) return null;
 			if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
 				try (final InputStream inputStream = conn.getInputStream()) {
+					if (shouldAbort()) return null;
 					final Bitmap original = BitmapFactory.decodeStream(inputStream);
 					if (original != null) {
 						final int size = Math.min(original.getWidth(), original.getHeight());
@@ -149,6 +157,8 @@ public class PlaybackService extends Service {
 					}
 				}
 			}
+		} catch (InterruptedIOException e) {
+			Thread.currentThread().interrupt();
 		} catch (IOException e) {
 			Log.e(TAG, "fetchThumbnail error: " + e.getMessage());
 		} finally {
@@ -159,7 +169,9 @@ public class PlaybackService extends Service {
 
 	@Nullable
 	private Notification buildNotification(final boolean isPlaying) {
-		final MediaMetadataCompat metadata = mediaSession.getController().getMetadata();
+		MediaSessionCompat session = mediaSession;
+		if (shouldAbort() || session == null) return null;
+		final MediaMetadataCompat metadata = session.getController().getMetadata();
 		if (metadata == null) return null;
 		final String title = metadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE);
 		final String artist = metadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST);
@@ -187,7 +199,7 @@ public class PlaybackService extends Service {
 				.setGroup("playback_notification")
 				.setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY);
 
-		final MediaStyle style = new MediaStyle().setMediaSession(mediaSession.getSessionToken());
+		final MediaStyle style = new MediaStyle().setMediaSession(session.getSessionToken());
 		final boolean includePrevious = shouldIncludePreviousAction(queueNavigationAvailability);
 		final boolean includeNext = shouldIncludeNextAction(queueNavigationAvailability);
 
@@ -212,34 +224,44 @@ public class PlaybackService extends Service {
 	}
 
 	public void showNotification(@Nullable final String title, @Nullable final String author, @Nullable final String thumbnail, final long duration) {
-		executorService.execute(() -> {
-			final Bitmap largeIcon = fetchThumbnail(thumbnail);
-			final MediaMetadataCompat metadata = new MediaMetadataCompat.Builder()
-					.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-					.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, author)
-					.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, largeIcon)
-					.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
-					.build();
-			mediaSession.setMetadata(metadata);
-			final PlaybackStateCompat initialState = buildPlaybackState(
-					PlaybackStateCompat.STATE_PAUSED,
-					0L,
-					1.0f,
-					queueNavigationAvailability);
-			mediaSession.setPlaybackState(initialState);
-			final Notification notification = buildNotification(false);
-			if (notification != null) {
-				try {
-					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-						startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-					} else {
-						startForeground(NOTIFICATION_ID, notification);
+		if (shouldAbort()) return;
+		try {
+			executorService.execute(() -> {
+				if (shouldAbort()) return;
+				final Bitmap largeIcon = fetchThumbnail(thumbnail);
+				if (shouldAbort()) return;
+				MediaSessionCompat session = mediaSession;
+				if (session == null) return;
+				final MediaMetadataCompat metadata = new MediaMetadataCompat.Builder()
+						.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+						.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, author)
+						.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, largeIcon)
+						.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+						.build();
+				if (shouldAbort()) return;
+				session.setMetadata(metadata);
+				final PlaybackStateCompat initialState = buildPlaybackState(
+						PlaybackStateCompat.STATE_PAUSED,
+						0L,
+						1.0f,
+						queueNavigationAvailability);
+				if (shouldAbort()) return;
+				session.setPlaybackState(initialState);
+				final Notification notification = buildNotification(false);
+				if (notification != null && !shouldAbort()) {
+					try {
+						if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+							startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+						} else {
+							startForeground(NOTIFICATION_ID, notification);
+						}
+					} catch (Exception e) {
+						Log.e(TAG, "startForeground failed: " + e.getMessage());
 					}
-				} catch (Exception e) {
-					Log.e(TAG, "startForeground failed: " + e.getMessage());
 				}
-			}
-		});
+			});
+		} catch (RejectedExecutionException ignored) {
+		}
 	}
 
 	public void hideNotification() {
@@ -249,28 +271,35 @@ public class PlaybackService extends Service {
 
 	public void updateProgress(final long pos, final float speed, final boolean isPlaying) {
 		if (isSeeking) return;
+		MediaSessionCompat session = mediaSession;
+		NotificationManager manager = notificationManager;
+		if (shouldAbort() || session == null) return;
 		final int stateCompat = isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
 		final PlaybackStateCompat playbackState = buildPlaybackState(stateCompat, pos, speed, queueNavigationAvailability);
-		mediaSession.setPlaybackState(playbackState);
+		if (shouldAbort()) return;
+		session.setPlaybackState(playbackState);
 		if (isPlaying != lastIsPlayingState) {
 			final Notification updatedNotification = buildNotification(isPlaying);
-			if (updatedNotification != null && notificationManager != null)
-				notificationManager.notify(NOTIFICATION_ID, updatedNotification);
+			if (updatedNotification != null && manager != null && !shouldAbort())
+				manager.notify(NOTIFICATION_ID, updatedNotification);
 		}
 		lastIsPlayingState = isPlaying;
 	}
 
 	public void updateQueueNavigationAvailability(@NonNull final QueueNav availability) {
 		queueNavigationAvailability = availability;
-		if (mediaSession == null) return;
-		final PlaybackStateCompat currentState = mediaSession.getController().getPlaybackState();
+		MediaSessionCompat session = mediaSession;
+		NotificationManager manager = notificationManager;
+		if (shouldAbort() || session == null) return;
+		final PlaybackStateCompat currentState = session.getController().getPlaybackState();
 		final int state = currentState != null ? currentState.getState() : PlaybackStateCompat.STATE_NONE;
 		final long position = currentState != null ? currentState.getPosition() : 0L;
 		final float speed = currentState != null ? currentState.getPlaybackSpeed() : 1.0f;
-		mediaSession.setPlaybackState(buildPlaybackState(state, position, speed, queueNavigationAvailability));
+		if (shouldAbort()) return;
+		session.setPlaybackState(buildPlaybackState(state, position, speed, queueNavigationAvailability));
 		final Notification updatedNotification = buildNotification(state == PlaybackStateCompat.STATE_PLAYING);
-		if (updatedNotification != null && notificationManager != null) {
-			notificationManager.notify(NOTIFICATION_ID, updatedNotification);
+		if (updatedNotification != null && manager != null && !shouldAbort()) {
+			manager.notify(NOTIFICATION_ID, updatedNotification);
 		}
 	}
 
@@ -316,19 +345,26 @@ public class PlaybackService extends Service {
 
 	@Override
 	public void onDestroy() {
-		super.onDestroy();
-		stopForeground(STOP_FOREGROUND_REMOVE);
-		if (mediaSession != null) {
-			mediaSession.setActive(false);
-			mediaSession.release();
-			mediaSession = null;
-		}
-		if (notificationManager != null) {
-			notificationManager.cancel(NOTIFICATION_ID);
-			notificationManager = null;
-		}
+		destroyed = true;
 		handler.removeCallbacksAndMessages(null);
 		executorService.shutdownNow();
+		stopForeground(STOP_FOREGROUND_REMOVE);
+		MediaSessionCompat session = mediaSession;
+		mediaSession = null;
+		if (session != null) {
+			session.setActive(false);
+			session.release();
+		}
+		NotificationManager manager = notificationManager;
+		notificationManager = null;
+		if (manager != null) {
+			manager.cancel(NOTIFICATION_ID);
+		}
+		super.onDestroy();
+	}
+
+	private boolean shouldAbort() {
+		return destroyed || Thread.currentThread().isInterrupted();
 	}
 
 	public class PlaybackBinder extends Binder {

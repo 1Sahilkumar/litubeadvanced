@@ -16,10 +16,12 @@ ytm-upsell-dialog-renderer,
 ytm-unlimited-offer-renderer,
 ytm-promoted-sparkles-web-renderer,
 [href*="/premium"],
-.yt-searchbox-suggestions-container,
 .playlist-engagement-panel-top-level-buttons,
 .yt-mini-app-container-view-model__background-blur,
 .yt-mini-app-container-view-model__background-scrim
 {
+    display: none !important;
+}
+ytm-watch .yt-searchbox-suggestions-container {
     display: none !important;
 }

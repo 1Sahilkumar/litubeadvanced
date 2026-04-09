@@ -10,17 +10,17 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.ConsoleMessage;
 import android.widget.FrameLayout;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -31,11 +31,15 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.hhst.youtubelite.R;
 import com.hhst.youtubelite.extension.ExtensionManager;
 import com.hhst.youtubelite.extractor.YoutubeExtractor;
+import com.hhst.youtubelite.extractor.potoken.PoTokenContextStore;
+import com.hhst.youtubelite.extractor.potoken.PoTokenJsonUtils;
+import com.hhst.youtubelite.extractor.potoken.PoTokenWebViewContext;
 import com.hhst.youtubelite.player.LitePlayer;
 import com.hhst.youtubelite.player.queue.QueueRepository;
 import com.hhst.youtubelite.player.queue.QueueWarmer;
 import com.hhst.youtubelite.ui.MainActivity;
 import com.hhst.youtubelite.util.StreamIOUtils;
+import com.hhst.youtubelite.util.ToastUtils;
 import com.hhst.youtubelite.util.UrlUtils;
 import com.hhst.youtubelite.util.ViewUtils;
 
@@ -44,6 +48,7 @@ import java.io.InputStream;
 import java.io.SequenceInputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,6 +56,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Response;
@@ -58,10 +64,63 @@ import okhttp3.Response;
 @UnstableApi
 public class YoutubeWebview extends WebView {
 
+	private static final String PO_TOKEN_CONTEXT_SCRIPT = """
+					(function(){
+					try{
+					var ytcfgObject=globalThis.ytcfg||null;
+					var ytcfgData=ytcfgObject&&ytcfgObject.data_?ytcfgObject.data_:null;
+					var getCfg=function(key){
+					try{
+					if(ytcfgObject&&typeof ytcfgObject.get==='function'){
+					var value=ytcfgObject.get(key);
+					if(value!==undefined&&value!==null&&value!==''){return value;}
+					}
+					}catch(ignored){}
+					return ytcfgData&&ytcfgData[key]!==undefined?ytcfgData[key]:null;
+					};
+					var initialDataContext=globalThis.ytInitialData&&globalThis.ytInitialData.responseContext?globalThis.ytInitialData.responseContext:null;
+					var initialPlayerContext=globalThis.ytInitialPlayerResponse&&globalThis.ytInitialPlayerResponse.responseContext?globalThis.ytInitialPlayerResponse.responseContext:null;
+					var innertubeContext=getCfg('INNERTUBE_CONTEXT')||initialDataContext||initialPlayerContext||null;
+					var client=innertubeContext&&innertubeContext.client?innertubeContext.client:null;
+					var initialData=globalThis.ytInitialData||null;
+					var rawFlags=getCfg('EXPERIMENT_FLAGS')||getCfg('serializedExperimentFlags')||null;
+					var serializedExperimentFlags=null;
+					if(typeof rawFlags==='string'){serializedExperimentFlags=rawFlags;}
+					else if(rawFlags&&typeof rawFlags==='object'){
+					try{serializedExperimentFlags=Object.keys(rawFlags).map(function(key){return key+'='+rawFlags[key];}).join(',');}catch(ignored){}
+					}
+					var premium=false;
+					try{
+					var topbar=initialData&&initialData.topbar&&initialData.topbar.desktopTopbarRenderer?initialData.topbar.desktopTopbarRenderer:null;
+					var logo=topbar&&topbar.logo&&topbar.logo.topbarLogoRenderer?topbar.logo.topbarLogoRenderer:null;
+					var iconType=logo&&logo.iconImage?logo.iconImage.iconType:null;
+					var tooltip=logo&&typeof logo.tooltipText==='string'?logo.tooltipText.toLowerCase():null;
+					premium=!!(getCfg('IS_SUBSCRIBED_TO_PREMIUM')||getCfg('IS_PREMIUM_USER')||iconType==='YOUTUBE_PREMIUM_LOGO'||(tooltip&&tooltip.indexOf('premium')>=0));
+					}catch(ignored){}
+					return JSON.stringify({
+					url:location.href,
+					visitorData:getCfg('VISITOR_DATA')||(client?client.visitorData:null),
+					dataSyncId:getCfg('DATASYNC_ID')||getCfg('DELEGATED_SESSION_ID')||null,
+					clientVersion:getCfg('INNERTUBE_CLIENT_VERSION')||getCfg('INNERTUBE_CONTEXT_CLIENT_VERSION')||(client?client.clientVersion:null),
+					sessionIndex:getCfg('SESSION_INDEX')||null,
+					serializedExperimentFlags:serializedExperimentFlags,
+					loggedIn:!!(getCfg('LOGGED_IN')||getCfg('DATASYNC_ID')||getCfg('DELEGATED_SESSION_ID')),
+					premium:premium
+					});
+					}catch(error){
+					return JSON.stringify({error:String(error&&error.stack?error.stack:error)});
+					}
+					})();
+					""";
 	private final ArrayList<String> scripts = new ArrayList<>();
-	@Nullable public View fullscreen = null;
-	@Nullable private OkHttpWebViewInterceptor okHttpWebViewInterceptor;
-	@Nullable private Consumer<String> updateVisitedHistory;
+	@NonNull
+	private final Frame frame = new Frame();
+	@Nullable
+	public View fullscreen;
+	@Nullable
+	private OkHttpWebViewInterceptor okHttpWebViewInterceptor;
+	@Nullable
+	private Consumer<String> updateVisitedHistory;
 	@Nullable private Consumer<String> onPageFinishedListener;
 	private YoutubeExtractor youtubeExtractor;
 	private LitePlayer player;
@@ -70,6 +129,13 @@ public class YoutubeWebview extends WebView {
 	private PoTokenProviderImpl poTokenProvider;
 	private QueueRepository queueRepository;
 	private QueueWarmer queueWarmer;
+	@Nullable
+	private PoTokenContextStore poTokenContextStore;
+	private volatile boolean initialized;
+	@Nullable
+	private volatile String poTokenInflightKey;
+	@Nullable
+	private volatile String poTokenDoneKey;
 	private boolean isDestroyed = false;
 
 	public YoutubeWebview(@NonNull final Context context) { this(context, null); }
@@ -77,7 +143,7 @@ public class YoutubeWebview extends WebView {
 	public YoutubeWebview(@NonNull final Context context, @Nullable final AttributeSet attrs, final int defStyleAttr) { super(context, attrs, defStyleAttr); }
 
 	public void setOkHttpClient(@NonNull final OkHttpClient okHttpClient) {
-		okHttpWebViewInterceptor = new OkHttpWebViewInterceptor(okHttpClient);
+		okHttpWebViewInterceptor = new OkHttpWebViewInterceptor(okHttpClient, new com.hhst.youtubelite.cache.WebViewCachePolicy());
 	}
 
 	public void setUpdateVisitedHistory(@Nullable final Consumer<String> updateVisitedHistory) {
@@ -114,6 +180,15 @@ public class YoutubeWebview extends WebView {
 
 	public void setQueueWarmer(@NonNull final QueueWarmer queueWarmer) {
 		this.queueWarmer = queueWarmer;
+	}
+
+	public void setPoTokenContextStore(@NonNull PoTokenContextStore poTokenContextStore) {
+		this.poTokenContextStore = poTokenContextStore;
+	}
+
+	public boolean isPoTokenReadyCandidate() {
+		String url = frame.url;
+		return initialized && frame.finished && UrlUtils.isAllowedUrl(url) && !UrlUtils.isGoogleAccountsUrl(url) && !url.startsWith("file:");
 	}
 
 	@Override
@@ -163,7 +238,7 @@ public class YoutubeWebview extends WebView {
 		try {
 			getContext().startActivity(new Intent(Intent.ACTION_VIEW, uri));
 		} catch (final ActivityNotFoundException e) {
-			post(() -> Toast.makeText(getContext(), R.string.application_not_found, Toast.LENGTH_SHORT).show());
+			ToastUtils.show(getContext(), R.string.application_not_found);
 		}
 	}
 
@@ -203,6 +278,7 @@ public class YoutubeWebview extends WebView {
 	@SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
 	public void init() {
 		if (isDestroyed) return;
+		initialized = true;
 		setFocusable(true);
 		setFocusableInTouchMode(true);
 		setLayerType(View.LAYER_TYPE_HARDWARE, null);
@@ -301,31 +377,68 @@ public class YoutubeWebview extends WebView {
 			public void doUpdateVisitedHistory(@NonNull final WebView view, @NonNull final String url, final boolean isReload) {
 				if (isDestroyed) return;
 				super.doUpdateVisitedHistory(view, url, isReload);
-				evaluateJavascript("window.dispatchEvent(new Event('doUpdateVisitedHistory'));", null);
+				YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('doUpdateVisitedHistory'));");
 				if (updateVisitedHistory != null) updateVisitedHistory.accept(url);
+				post(YoutubeWebview.this::refreshPoTokenContext);
 			}
 
 			@Override
 			public void onPageStarted(@NonNull final WebView view, @NonNull final String url, @Nullable final Bitmap favicon) {
 				if (isDestroyed) return;
 				super.onPageStarted(view, url, favicon);
-				doInjectJavaScript();
-				evaluateJavascript("window.dispatchEvent(new Event('onPageStarted'));", null);
+				frame.epoch.incrementAndGet();
+				frame.finished = false;
+				frame.url = url;
+				poTokenInflightKey = null;
+				poTokenDoneKey = null;
+				injectJavaScript(url);
+				YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('onPageStarted'));");
 			}
 
 			@Override
 			public void onPageFinished(@NonNull final WebView view, @NonNull final String url) {
 				if (isDestroyed) return;
 				super.onPageFinished(view, url);
-				doInjectJavaScript();
-				evaluateJavascript("window.dispatchEvent(new Event('onPageFinished'));", null);
-				evaluateJavascript("window.dispatchEvent(new Event('onProgressChangeFinish'));", null);
+				frame.finished = true;
+				frame.url = url;
+				injectJavaScript(url);
+				YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('onPageFinished'));");
+				YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('onProgressChangeFinish'));");
+				refreshPoTokenContext();
 				if (onPageFinishedListener != null) onPageFinishedListener.accept(url);
 				postDelayed(() -> {
 					if (getParent() instanceof SwipeRefreshLayout) {
 						((SwipeRefreshLayout) getParent()).setRefreshing(false);
 					}
 				}, 500);
+			}
+
+			@Override
+			public void onReceivedError(@NonNull WebView view, @NonNull WebResourceRequest request, @NonNull WebResourceError error) {
+				if (request.isForMainFrame()) {
+					int errorCode = error.getErrorCode();
+					String failingUrl = request.getUrl().toString();
+					String description = error.getDescription().toString();
+
+					String encodedDescription = URLEncoder.encode(description, StandardCharsets.UTF_8);
+					String encodedUrl = URLEncoder.encode(failingUrl, StandardCharsets.UTF_8);
+					String url = "file:///android_asset/page/error.html?description=" + encodedDescription + "&errorCode=" + errorCode + "&url=" + encodedUrl;
+					post(() -> view.loadUrl(url));
+				}
+			}
+
+			@Override
+			public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+				if (request.isForMainFrame()) {
+					int statusCode = errorResponse.getStatusCode();
+					String failingUrl = request.getUrl().toString();
+					String reason = errorResponse.getReasonPhrase();
+
+					String encodedDescription = URLEncoder.encode("HTTP Error " + statusCode + ": " + reason, StandardCharsets.UTF_8);
+					String encodedUrl = URLEncoder.encode(failingUrl, StandardCharsets.UTF_8);
+					String url = "file:///android_asset/page/error.html?description=" + encodedDescription + "&errorCode=" + statusCode + "&url=" + encodedUrl;
+					post(() -> view.loadUrl(url));
+				}
 			}
 		});
 
@@ -340,7 +453,7 @@ public class YoutubeWebview extends WebView {
 			public void onProgressChanged(@NonNull final WebView view, final int progress) {
 				if (isDestroyed) return;
 				if (progress >= 100) {
-					evaluateJavascript("window.dispatchEvent(new Event('onProgressChangeFinish'));", null);
+					YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('onProgressChangeFinish'));");
 				}
 				super.onProgressChanged(view, progress);
 			}
@@ -363,7 +476,7 @@ public class YoutubeWebview extends WebView {
 					decorView.addView(fullscreen, new FrameLayout.LayoutParams(-1, -1));
 					fullscreen.setVisibility(View.VISIBLE);
 					fullscreen.setKeepScreenOn(true);
-					evaluateJavascript("window.dispatchEvent(new Event('onFullScreen'));", null);
+					YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('onFullScreen'));");
 				}
 			}
 
@@ -374,14 +487,42 @@ public class YoutubeWebview extends WebView {
 				fullscreen.setVisibility(View.GONE);
 				fullscreen.setKeepScreenOn(false);
 				setVisibility(View.VISIBLE);
-				evaluateJavascript("window.dispatchEvent(new Event('exitFullScreen'));", null);
+				YoutubeWebview.this.postEvaluateJavascript("window.dispatchEvent(new Event('exitFullScreen'));");
 			}
 		});
 	}
 
-	private void doInjectJavaScript() {
-		if (isDestroyed) return;
-		for (final String js : scripts) evaluateJavascript(js, null);
+	public void refreshPoTokenContext() {
+		PoTokenContextStore contextStore = poTokenContextStore;
+		String pageUrl = frame.url;
+		long capturedPageEpoch = frame.epoch.get();
+		if (contextStore == null || !isShown() || !isPoTokenReadyCandidate() || pageUrl == null) {
+			return;
+		}
+		String key = capturedPageEpoch + "|" + pageUrl;
+		if (key.equals(poTokenInflightKey) || key.equals(poTokenDoneKey)) return;
+		poTokenInflightKey = key;
+		super.evaluateJavascript(PO_TOKEN_CONTEXT_SCRIPT, rawValue -> {
+			if (contextStore != poTokenContextStore || capturedPageEpoch != frame.epoch.get() || !Objects.equals(pageUrl, frame.url)) {
+				poTokenInflightKey = null;
+				return;
+			}
+			PoTokenWebViewContext context = PoTokenWebViewContext.fromJson(pageUrl, capturedPageEpoch, PoTokenJsonUtils.normalizeEvaluateJavascriptResult(rawValue));
+			if (context != null) {
+				contextStore.update(context);
+				poTokenDoneKey = key;
+			}
+			poTokenInflightKey = null;
+		});
+	}
+
+	public void setScriptActive(boolean active) {
+		postEvaluateJavascript("(function(){window.__liteActive=" + active + ";if(window.__liteSetActive){window.__liteSetActive(" + active + ");}})();");
+	}
+
+	private void injectJavaScript(@Nullable String url) {
+		if (UrlUtils.isGoogleAccountsUrl(url)) return;
+		for (String js : scripts) postEvaluateJavascript(js);
 	}
 
 	public void injectJavaScript(@NonNull final InputStream is) {
@@ -410,8 +551,12 @@ public class YoutubeWebview extends WebView {
 		}
 	}
 
+	private void postEvaluateJavascript(@NonNull String script) {
+		post(() -> evaluateJavascript(script, null));
+	}
+
 	@Override
-	public void evaluateJavascript(String script, ValueCallback<String> resultCallback) {
+	public void evaluateJavascript(@NonNull String script, @Nullable ValueCallback<String> resultCallback) {
 		if (isDestroyed) return;
 		try {
 			super.evaluateJavascript(script, resultCallback);
@@ -423,10 +568,16 @@ public class YoutubeWebview extends WebView {
 	@Override
 	public void destroy() {
 		isDestroyed = true;
-		setWebViewClient(null);
-		setWebChromeClient(null);
 		removeJavascriptInterface("android");
 		removeJavascriptInterface("lite");
 		super.destroy();
+	}
+
+	private static final class Frame {
+		@NonNull
+		private final AtomicLong epoch = new AtomicLong();
+		private volatile boolean finished;
+		@Nullable
+		private volatile String url;
 	}
 }
